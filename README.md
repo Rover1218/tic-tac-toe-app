@@ -1,16 +1,40 @@
-# tic_tac_toe
+# Tic Tac Toe
 
-A new Flutter project.
+A classic Tic Tac Toe game built with Flutter.
+
+## Features
+
+- Interactive 3x3 game board
+- Two player gameplay
+- Score tracking
+- Game reset functionality
+- Clean and modern UI
 
 ## Getting Started
 
-This project is a starting point for a Flutter application.
+1. Make sure you have Flutter installed on your machine
+2. Clone this repository
+3. Run `flutter pub get` to install dependencies
+4. Run `flutter run` to start the app
 
-A few resources to get you started if this is your first Flutter project:
+## Technologies Used
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+- Flutter
+- Dart
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Development Setup
+
+Requirements:
+- Flutter SDK
+- Android Studio / VS Code
+- An emulator or physical device
+
+For detailed Flutter setup instructions, check out the [official documentation](https://docs.flutter.dev/get-started/install).
+
+## Contributing
+
+Feel free to submit issues and pull requests.
+
+## License
+
+This project is licensed under the MIT License.
