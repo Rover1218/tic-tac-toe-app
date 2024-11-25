@@ -4,6 +4,10 @@ import 'package:confetti/confetti.dart';
 
 void main() => runApp(const TicTacToeApp());
 
+enum GameMode { twoPlayer, computer }
+
+enum Difficulty { easy, medium, hard }
+
 class TicTacToeApp extends StatelessWidget {
   const TicTacToeApp({super.key});
 
@@ -44,6 +48,8 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
     const Color(0xFFE94560).withOpacity(0.9), // Soft Red for X
     const Color(0xFF2ECC71).withOpacity(0.9), // Emerald Green for O
   ];
+  GameMode gameMode = GameMode.twoPlayer;
+  Difficulty difficulty = Difficulty.medium;
 
   @override
   void initState() {
@@ -98,11 +104,19 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
     });
   }
 
+  void resetStats() {
+    setState(() {
+      xScore = 0;
+      oScore = 0;
+    });
+  }
+
   void handleTap(int index) {
     if (board[index] == '' && !gameOver) {
       setState(() {
         board[index] = currentPlayer;
         _controller.forward(from: 0.0);
+
         if (checkWinner(currentPlayer)) {
           _celebrationController.forward(from: 0.0);
           _confettiController.play();
@@ -118,9 +132,100 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
           gameOver = true;
         } else {
           currentPlayer = currentPlayer == 'X' ? 'O' : 'X';
+          if (gameMode == GameMode.computer && currentPlayer == 'O') {
+            makeComputerMove();
+          }
         }
       });
     }
+  }
+
+  void makeComputerMove() {
+    if (gameOver || currentPlayer == 'X') return;
+
+    int move;
+    switch (difficulty) {
+      case Difficulty.easy:
+        move = getRandomMove();
+        break;
+      case Difficulty.medium:
+        move =
+            math.Random().nextDouble() < 0.7 ? getBestMove() : getRandomMove();
+        break;
+      case Difficulty.hard:
+        move = getBestMove();
+        break;
+    }
+
+    Future.delayed(const Duration(milliseconds: 500), () {
+      handleTap(move);
+    });
+  }
+
+  int getRandomMove() {
+    List<int> availableMoves = [];
+    for (int i = 0; i < board.length; i++) {
+      if (board[i] == '') availableMoves.add(i);
+    }
+    return availableMoves[math.Random().nextInt(availableMoves.length)];
+  }
+
+  int getBestMove() {
+    int bestScore = -1000;
+    int bestMove = 0;
+
+    for (int i = 0; i < board.length; i++) {
+      if (board[i] == '') {
+        board[i] = 'O';
+        int score = minimax(board, 0, false);
+        board[i] = '';
+        if (score > bestScore) {
+          bestScore = score;
+          bestMove = i;
+        }
+      }
+    }
+    return bestMove;
+  }
+
+  int minimax(List<String> board, int depth, bool isMaximizing) {
+    String result = checkGameResult();
+    if (result != '') {
+      return result == 'O'
+          ? 10
+          : result == 'X'
+              ? -10
+              : 0;
+    }
+
+    if (isMaximizing) {
+      int bestScore = -1000;
+      for (int i = 0; i < board.length; i++) {
+        if (board[i] == '') {
+          board[i] = 'O';
+          bestScore = math.max(bestScore, minimax(board, depth + 1, false));
+          board[i] = '';
+        }
+      }
+      return bestScore;
+    } else {
+      int bestScore = 1000;
+      for (int i = 0; i < board.length; i++) {
+        if (board[i] == '') {
+          board[i] = 'X';
+          bestScore = math.min(bestScore, minimax(board, depth + 1, true));
+          board[i] = '';
+        }
+      }
+      return bestScore;
+    }
+  }
+
+  String checkGameResult() {
+    if (checkWinner('X')) return 'X';
+    if (checkWinner('O')) return 'O';
+    if (!board.contains('')) return 'draw';
+    return '';
   }
 
   bool checkWinner(String player) {
@@ -228,9 +333,352 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
     );
   }
 
+  Widget _buildModeSelector() {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 10),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildModeButton(
+                icon: Icons.people,
+                label: '2 Players',
+                isSelected: gameMode == GameMode.twoPlayer,
+                onTap: () => setState(() {
+                  gameMode = GameMode.twoPlayer;
+                  resetGame();
+                }),
+                color: playerColors[0],
+              ),
+              const SizedBox(width: 16),
+              _buildModeButton(
+                icon: Icons.computer,
+                label: 'vs Computer',
+                isSelected: gameMode == GameMode.computer,
+                onTap: () => setState(() {
+                  gameMode = GameMode.computer;
+                  resetGame();
+                }),
+                color: playerColors[1],
+              ),
+            ],
+          ),
+          if (gameMode == GameMode.computer)
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              margin: const EdgeInsets.only(top: 16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  for (var diff in Difficulty.values)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: _buildDifficultyButton(
+                        diff,
+                        isSelected: difficulty == diff,
+                        onTap: () => setState(() {
+                          difficulty = diff;
+                          resetGame();
+                        }),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildModeButton({
+    required IconData icon,
+    required String label,
+    required bool isSelected,
+    required VoidCallback onTap,
+    required Color color,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? color.withOpacity(0.2)
+              : Colors.white.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? color : Colors.white24,
+            width: 2,
+          ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: color.withOpacity(0.3),
+                    blurRadius: 8,
+                    spreadRadius: 1,
+                  )
+                ]
+              : [],
+        ),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              color: Colors.white,
+              size: 24,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDifficultyButton(Difficulty diff,
+      {required bool isSelected, required VoidCallback onTap}) {
+    final colors = {
+      Difficulty.easy: Colors.green,
+      Difficulty.medium: Colors.orange,
+      Difficulty.hard: Colors.red,
+    };
+
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? colors[diff]!.withOpacity(0.2)
+              : Colors.white.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(15),
+          border: Border.all(
+            color: isSelected ? colors[diff]! : Colors.white24,
+            width: 2,
+          ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: colors[diff]!.withOpacity(0.3),
+                    blurRadius: 8,
+                    spreadRadius: 1,
+                  )
+                ]
+              : [],
+        ),
+        child: Text(
+          diff.name.toUpperCase(),
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 14,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSettingsDrawer() {
+    return Drawer(
+      backgroundColor: const Color(0xFF6A11CB),
+      child: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+          children: [
+            const Text(
+              'Settings',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // Game Mode Section
+            const Text(
+              'Game Mode',
+              style: TextStyle(color: Colors.white70, fontSize: 16),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildModeButton(
+                    icon: Icons.people,
+                    label: '2 Players',
+                    isSelected: gameMode == GameMode.twoPlayer,
+                    onTap: () => setState(() {
+                      gameMode = GameMode.twoPlayer;
+                      resetGame();
+                      Navigator.pop(context);
+                    }),
+                    color: playerColors[0],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildModeButton(
+                    icon: Icons.computer,
+                    label: 'vs Computer',
+                    isSelected: gameMode == GameMode.computer,
+                    onTap: () => setState(() {
+                      gameMode = GameMode.computer;
+                      resetGame();
+                      Navigator.pop(context);
+                    }),
+                    color: playerColors[1],
+                  ),
+                ),
+              ],
+            ),
+
+            // Difficulty Section (only show when computer mode is selected)
+            if (gameMode == GameMode.computer) ...[
+              const SizedBox(height: 20),
+              const Text(
+                'Difficulty',
+                style: TextStyle(color: Colors.white70, fontSize: 16),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (var diff in Difficulty.values)
+                    _buildDifficultyButton(
+                      diff,
+                      isSelected: difficulty == diff,
+                      onTap: () => setState(() {
+                        difficulty = diff;
+                        resetGame();
+                        Navigator.pop(context);
+                      }),
+                    ),
+                ],
+              ),
+            ],
+
+            // Stats Section
+            const SizedBox(height: 30),
+            const Text(
+              'Statistics',
+              style: TextStyle(color: Colors.white70, fontSize: 16),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(15),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(15),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Player X Wins:',
+                        style: TextStyle(color: playerColors[0]),
+                      ),
+                      Text(
+                        '$xScore',
+                        style: TextStyle(
+                            color: playerColors[0],
+                            fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Player O Wins:',
+                        style: TextStyle(color: playerColors[1]),
+                      ),
+                      Text(
+                        '$oScore',
+                        style: TextStyle(
+                            color: playerColors[1],
+                            fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 15),
+            ElevatedButton(
+              onPressed: () {
+                resetStats();
+                Navigator.pop(context);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red.withOpacity(0.2),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Reset Stats'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true, // Add this line
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(56),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                const Color(0xFF6A11CB).withOpacity(0.8),
+                const Color(0xFF2575FC).withOpacity(0.8),
+              ],
+            ),
+          ),
+          child: AppBar(
+            title: const Text(
+              'Tic Tac Toe',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            actions: [
+              Builder(
+                builder: (context) => IconButton(
+                  icon: const Icon(Icons.settings, color: Colors.white),
+                  onPressed: () => Scaffold.of(context).openEndDrawer(),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      endDrawer: _buildSettingsDrawer(),
       body: Stack(
         children: [
           Container(

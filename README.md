@@ -5,24 +5,32 @@ A modern implementation of the classic Tic Tac Toe game built with Flutter. Play
 ## Features
 
 - Interactive 3x3 game board
-- Two player gameplay
-- Score tracking
-- Game reset functionality
-- Clean and modern UI
-
-Additional features:
-- Beautiful animations
-- Sound effects
-- Dark/Light theme support
+- Multiple game modes:
+  - Two player mode
+  - Computer opponent with 3 difficulty levels:
+    - Easy: Random moves
+    - Medium: 70% smart moves, 30% random
+    - Hard: Unbeatable AI using minimax algorithm
+- Comprehensive scoring system
+- Beautiful UI with:
+  - Smooth animations
+  - Particle effects
+  - Gradient backgrounds
+  - Shimmer effects
+  - Victory celebrations
+- Game settings drawer with:
+  - Game mode selection
+  - Difficulty settings
+  - Statistics tracking
+  - Score reset option
 - Responsive design for all screen sizes
-- Game state persistence
-- Victory animations
-- Draw detection
+- Game state management
+- Victory and draw detection
 
 ## Installation
 
 You can download and install the APK directly:
-- [Download APK](https://github.com/Rover1218/tic-tac-toe-app/releases/download/v1.0.0/app-release.apk)
+- [Download APK](https://github.com/Rover1218/tic-tac-toe-app/releases/download/v1.1.0/app-release.apk)
 
 To install:
 1. Download the APK file on your Android device
@@ -39,39 +47,48 @@ To install:
 ## How to Play
 
 1. Launch the game
-2. Choose your symbol (X or O)
-3. Players take turns tapping empty cells
-4. First player to align 3 symbols wins
-5. Tap 'Reset' to start a new game
-
-## Game Rules
-
-- X's play first
-- Players alternate turns
-- Three in a row wins (horizontal, vertical, diagonal)
-- Game ends in draw if board fills without winner
-
-## Technologies Used
-
-- Flutter
-- Dart
+2. Open settings (gear icon) to:
+   - Choose game mode (2 Players or vs Computer)
+   - Select difficulty level for computer opponent
+   - View statistics
+3. Players take turns:
+   - X always plays first
+   - Tap any empty cell to make a move
+   - In computer mode, AI will automatically respond
+4. Game ends when:
+   - Three symbols align (horizontal, vertical, or diagonal)
+   - Board fills up (Draw)
+5. Use 'New Game' button to start over
+6. Track scores in the statistics section
 
 ## Technical Details
 
-### Architecture
-- Clean Architecture principles
-- BLoC pattern for state management
-- Repository pattern for data handling
+### Features Implementation
+- Custom animations using:
+  - AnimationController
+  - Transform animations
+  - Confetti effects
+  - Shimmer effects
+  - Pulse animations
+- AI Implementation:
+  - Minimax algorithm for hard difficulty
+  - Random selection for easy mode
+  - Hybrid approach for medium difficulty
+- UI Components:
+  - Gradient backgrounds
+  - Custom animated buttons
+  - Responsive layout
+  - Settings drawer
+  - Score tracking
 
-### Key Components
-- Custom animations using Flutter's animation framework
-- Shared preferences for score persistence
-- Sound management using AudioPlayers
-- Custom widgets for game board and pieces
+### Dependencies
+- flutter/material.dart
+- dart:math
+- confetti package
 
-## Development Setup
+## Development
 
 Requirements:
 - Flutter SDK
 - Android Studio / VS Code
-- An emulator or physical device
+- A mobile device or emulator
