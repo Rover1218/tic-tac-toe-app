@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import 'package:confetti/confetti.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 void main() => runApp(const TicTacToeApp());
 
@@ -45,16 +46,19 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
   late AnimationController _shimmerController;
   late ConfettiController _confettiController;
   bool isLoading = true;
-  final List<Color> playerColors = [
-    const Color(0xFFE94560).withOpacity(0.9), // Soft Red for X
-    const Color(0xFF2ECC71).withOpacity(0.9), // Emerald Green for O
+  static const List<Color> playerColors = [
+    Color(0xFFE94560), // Soft Red for X
+    Color(0xFF2ECC71), // Emerald Green for O
   ];
   GameMode gameMode = GameMode.twoPlayer;
   Difficulty difficulty = Difficulty.medium;
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  bool isSoundEnabled = true; // Add this line
 
   @override
   void initState() {
     super.initState();
+    _initAudio();
     _controller = AnimationController(
       duration: const Duration(milliseconds: 300),
       vsync: this,
@@ -86,14 +90,39 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
     });
   }
 
+  Future<void> _initAudio() async {
+    await _audioPlayer.setReleaseMode(ReleaseMode.stop);
+  }
+
   @override
   void dispose() {
+    _audioPlayer.dispose();
     _controller.dispose();
     _pulseController.dispose();
     _celebrationController.dispose();
     _shimmerController.dispose();
     _confettiController.dispose();
     super.dispose();
+  }
+
+  Future<void> _playSound(String soundType) async {
+    if (!isSoundEnabled) return; // Add this check
+
+    try {
+      await _audioPlayer.stop();
+
+      // Remove the initial delay for move sound
+      if (soundType == 'move') {
+        await _audioPlayer.play(AssetSource('sounds/move.mp3'));
+      } else {
+        // Keep delays for win and draw sounds
+        await Future.delayed(
+            Duration(milliseconds: soundType == 'win' ? 100 : 50));
+        await _audioPlayer.play(AssetSource('sounds/$soundType.mp3'));
+      }
+    } catch (e) {
+      debugPrint('Error playing sound: $e');
+    }
   }
 
   void resetGame() {
@@ -115,6 +144,9 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
 
   void handleTap(int index) {
     if (board[index] == '' && !gameOver) {
+      // Play move sound immediately before state update
+      _playSound('move');
+
       setState(() {
         board[index] = currentPlayer;
         _controller.forward(from: 0.0);
@@ -122,6 +154,9 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
         if (checkWinner(currentPlayer)) {
           _celebrationController.forward(from: 0.0);
           _confettiController.play();
+          Future.delayed(const Duration(milliseconds: 100), () {
+            _playSound('win');
+          });
           result = '$currentPlayer Wins!';
           gameOver = true;
           if (currentPlayer == 'X') {
@@ -132,7 +167,10 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
         } else if (!board.contains('')) {
           result = 'It\'s a Draw!';
           gameOver = true;
-          draws++; // Add this line
+          draws++;
+          Future.delayed(const Duration(milliseconds: 50), () {
+            _playSound('draw');
+          });
         } else {
           currentPlayer = currentPlayer == 'X' ? 'O' : 'X';
           if (gameMode == GameMode.computer && currentPlayer == 'O') {
@@ -180,7 +218,7 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
     for (int i = 0; i < board.length; i++) {
       if (board[i] == '') {
         board[i] = 'O';
-        int score = minimax(board, 0, false);
+        int score = minimax(board, 0, false, -1000, 1000);
         board[i] = '';
         if (score > bestScore) {
           bestScore = score;
@@ -191,36 +229,47 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
     return bestMove;
   }
 
-  int minimax(List<String> board, int depth, bool isMaximizing) {
+  int minimax(
+      List<String> board, int depth, bool isMaximizing, int alpha, int beta) {
     String result = checkGameResult();
     if (result != '') {
       return result == 'O'
-          ? 10
+          ? 10 - depth
           : result == 'X'
-              ? -10
+              ? depth - 10
               : 0;
     }
 
     if (isMaximizing) {
-      int bestScore = -1000;
+      int maxEval = -1000;
       for (int i = 0; i < board.length; i++) {
         if (board[i] == '') {
           board[i] = 'O';
-          bestScore = math.max(bestScore, minimax(board, depth + 1, false));
+          int eval = minimax(board, depth + 1, false, alpha, beta);
           board[i] = '';
+          maxEval = math.max(maxEval, eval);
+          alpha = math.max(alpha, eval);
+          if (beta <= alpha) {
+            break; // Alpha-beta pruning
+          }
         }
       }
-      return bestScore;
+      return maxEval;
     } else {
-      int bestScore = 1000;
+      int minEval = 1000;
       for (int i = 0; i < board.length; i++) {
         if (board[i] == '') {
           board[i] = 'X';
-          bestScore = math.min(bestScore, minimax(board, depth + 1, true));
+          int eval = minimax(board, depth + 1, true, alpha, beta);
           board[i] = '';
+          minEval = math.min(minEval, eval);
+          beta = math.min(beta, eval);
+          if (beta <= alpha) {
+            break; // Alpha-beta pruning
+          }
         }
       }
-      return bestScore;
+      return minEval;
     }
   }
 
@@ -291,105 +340,55 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
               )
             : null,
       ),
-      child: Center(
-        child: AnimatedDefaultTextStyle(
-          duration: const Duration(milliseconds: 200),
-          style: TextStyle(
-            fontSize: board[index].isEmpty ? 0 : 70,
-            fontWeight: FontWeight.bold,
-            color: board[index] == 'X' ? playerColors[0] : playerColors[1],
-            shadows: [
-              BoxShadow(
-                color: board[index] == 'X'
-                    ? playerColors[0].withOpacity(0.8)
-                    : playerColors[1].withOpacity(0.8),
-                blurRadius: 15,
-                spreadRadius: 5,
-              ),
-              BoxShadow(
-                color: board[index] == 'X'
-                    ? playerColors[0].withOpacity(0.4)
-                    : playerColors[1].withOpacity(0.4),
-                blurRadius: 30,
-                spreadRadius: 10,
-              ),
-            ],
-          ),
-          child: AnimatedBuilder(
-            animation: _shimmerController,
-            builder: (context, child) {
-              return Transform.rotate(
-                angle: board[index].isEmpty ? 0 : math.pi * 2,
-                child: Transform.scale(
-                  scale: board[index].isEmpty
-                      ? 1
-                      : 1.0 +
-                          (0.1 *
-                              math.sin(_shimmerController.value * math.pi * 2)),
-                  child: Text(board[index]),
-                ),
-              );
-            },
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildModeSelector() {
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 10),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _buildModeButton(
-                icon: Icons.people,
-                label: '2 Players',
-                isSelected: gameMode == GameMode.twoPlayer,
-                onTap: () => setState(() {
-                  gameMode = GameMode.twoPlayer;
-                  resetGame();
-                }),
-                color: playerColors[0],
-              ),
-              const SizedBox(width: 16),
-              _buildModeButton(
-                icon: Icons.computer,
-                label: 'vs Computer',
-                isSelected: gameMode == GameMode.computer,
-                onTap: () => setState(() {
-                  gameMode = GameMode.computer;
-                  resetGame();
-                }),
-                color: playerColors[1],
-              ),
-            ],
-          ),
-          if (gameMode == GameMode.computer)
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 300),
-              margin: const EdgeInsets.only(top: 16),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  for (var diff in Difficulty.values)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: _buildDifficultyButton(
-                        diff,
-                        isSelected: difficulty == diff,
-                        onTap: () => setState(() {
-                          difficulty = diff;
-                          resetGame();
-                        }),
-                      ),
-                    ),
+      child: FittedBox(
+        // Add FittedBox here
+        fit: BoxFit.contain,
+        child: Container(
+          padding: const EdgeInsets.all(15),
+          child: Center(
+            child: AnimatedDefaultTextStyle(
+              duration: const Duration(milliseconds: 200),
+              style: TextStyle(
+                fontSize: board[index].isEmpty ? 0 : 60, // Reduced from 70
+                fontWeight: FontWeight.bold,
+                color: board[index] == 'X' ? playerColors[0] : playerColors[1],
+                shadows: [
+                  BoxShadow(
+                    color: board[index] == 'X'
+                        ? playerColors[0].withOpacity(0.8)
+                        : playerColors[1].withOpacity(0.8),
+                    blurRadius: 15,
+                    spreadRadius: 5,
+                  ),
+                  BoxShadow(
+                    color: board[index] == 'X'
+                        ? playerColors[0].withOpacity(0.4)
+                        : playerColors[1].withOpacity(0.4),
+                    blurRadius: 30,
+                    spreadRadius: 10,
+                  ),
                 ],
               ),
+              child: AnimatedBuilder(
+                animation: _shimmerController,
+                builder: (context, child) {
+                  return Transform.rotate(
+                    angle: board[index].isEmpty ? 0 : math.pi * 2,
+                    child: Transform.scale(
+                      scale: board[index].isEmpty
+                          ? 1
+                          : 1.0 +
+                              (0.1 *
+                                  math.sin(
+                                      _shimmerController.value * math.pi * 2)),
+                      child: Text(board[index]),
+                    ),
+                  );
+                },
+              ),
             ),
-        ],
+          ),
+        ),
       ),
     );
   }
@@ -659,6 +658,42 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
               ),
             ],
 
+            // Add Sound Settings Section before Stats Section
+            const SizedBox(height: 30),
+            const Text(
+              'Sound Settings',
+              style: TextStyle(color: Colors.white70, fontSize: 16),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(15),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(15),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Sound Effects',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  Switch(
+                    value: isSoundEnabled,
+                    onChanged: (value) {
+                      setState(() {
+                        isSoundEnabled = value;
+                      });
+                    },
+                    activeColor: const Color(0xFF2575FC),
+                    activeTrackColor: const Color(0xFF2575FC).withOpacity(0.3),
+                    inactiveThumbColor: Colors.white70,
+                    inactiveTrackColor: Colors.white24,
+                  ),
+                ],
+              ),
+            ),
+
             // Stats Section
             const SizedBox(height: 30),
             const Text(
@@ -680,6 +715,62 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
               child: const Text('Reset Stats'),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  // Add this method for the current player indicator
+  Widget _buildCurrentPlayerIndicator() {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 500), // Add const here
+      transitionBuilder: (Widget child, Animation<double> animation) {
+        return ScaleTransition(scale: animation, child: child);
+      },
+      child: Container(
+        key: ValueKey<String>(currentPlayer),
+        width: 80, // Fixed width
+        height: 80, // Fixed height
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: LinearGradient(
+            colors: currentPlayer == 'X'
+                ? const [Colors.redAccent, Colors.pinkAccent] // Add const here
+                : const [
+                    Colors.lightBlueAccent,
+                    Colors.blueAccent
+                  ], // Add const here
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          // ignore: prefer_const_constructors_in_immutables, prefer_const_literals_to_create_immutables
+          boxShadow: [
+            BoxShadow(
+              color: currentPlayer == 'X'
+                  ? Colors.pinkAccent.withOpacity(0.6)
+                  : Colors.blueAccent.withOpacity(0.6),
+              blurRadius: 15,
+              spreadRadius: 5,
+            ),
+          ],
+        ),
+        child: Center(
+          // Add Center widget
+          child: Text(
+            currentPlayer,
+            style: const TextStyle(
+              fontSize: 48,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+              shadows: [
+                Shadow(
+                  blurRadius: 10,
+                  color: Colors.black45,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -775,35 +866,8 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
 
                       // Current Player Indicator
                       SizedBox(
-                        height: 40,
-                        child: AnimatedBuilder(
-                          animation: _pulseController,
-                          builder: (context, child) => Transform.scale(
-                            scale: currentPlayer == 'X'
-                                ? 1 + (_pulseController.value * 0.1)
-                                : 1 - (_pulseController.value * 0.1),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 300),
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 8), // reduced vertical padding
-                              decoration: BoxDecoration(
-                                color: currentPlayer == 'X'
-                                    ? Colors.pink.withOpacity(0.3)
-                                    : Colors.amber.withOpacity(0.3),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Text(
-                                'Current Player: $currentPlayer',
-                                style: const TextStyle(
-                                  fontSize: 20, // reduced from 24
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
+                        height: 100,
+                        child: _buildCurrentPlayerIndicator(),
                       ),
 
                       const SizedBox(height: 15), // reduced from 20

@@ -12,22 +12,22 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace "com.example.tic_tac_toe"
-    compileSdkVersion flutter.compileSdkVersion ?: 33 // Default to SDK 33 if not defined
-    ndkVersion flutter.ndkVersion ?: "23.1.7779620"
+    compileSdkVersion 34
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
 
     kotlinOptions {
-        jvmTarget = '1.8'
+        jvmTarget = '17'
     }
 
     defaultConfig {
         applicationId "com.example.tic_tac_toe"
-        minSdkVersion flutter.minSdkVersion ?: 21 // Default to SDK 21 if not defined
-        targetSdkVersion flutter.targetSdkVersion ?: 33 // Default to SDK 33 if not defined
+        minSdkVersion 21
+        targetSdkVersion 34
         versionCode 1
         versionName "1.0.0"
     }
@@ -64,5 +64,5 @@ flutter {
 }
 
 dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.10"
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.22"
 }
