@@ -39,6 +39,7 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
   late AnimationController _controller;
   int xScore = 0;
   int oScore = 0;
+  int draws = 0; // Add this line
   late AnimationController _pulseController;
   late AnimationController _celebrationController;
   late AnimationController _shimmerController;
@@ -108,6 +109,7 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
     setState(() {
       xScore = 0;
       oScore = 0;
+      draws = 0; // Add this line
     });
   }
 
@@ -130,6 +132,7 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
         } else if (!board.contains('')) {
           result = 'It\'s a Draw!';
           gameOver = true;
+          draws++; // Add this line
         } else {
           currentPlayer = currentPlayer == 'X' ? 'O' : 'X';
           if (gameMode == GameMode.computer && currentPlayer == 'O') {
@@ -488,6 +491,89 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
     );
   }
 
+  Widget _buildStatistics() {
+    final gameCount = xScore + oScore + draws; //Use actual draws count
+
+    return Container(
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(15),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Player X Wins:',
+                style: TextStyle(color: playerColors[0]),
+              ),
+              Text(
+                '$xScore',
+                style: TextStyle(
+                  color: playerColors[0],
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Player O Wins:',
+                style: TextStyle(color: playerColors[1]),
+              ),
+              Text(
+                '$oScore',
+                style: TextStyle(
+                  color: playerColors[1],
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Draws:',
+                style: TextStyle(color: Colors.white70),
+              ),
+              Text(
+                '$draws', // Use draws counter directly
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const Divider(color: Colors.white24, height: 20),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Total Games:',
+                style: TextStyle(color: Colors.white),
+              ),
+              Text(
+                '$gameCount',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildSettingsDrawer() {
     return Drawer(
       backgroundColor: const Color(0xFF6A11CB),
@@ -536,11 +622,12 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
                     icon: Icons.computer,
                     label: 'vs Computer',
                     isSelected: gameMode == GameMode.computer,
-                    onTap: () => setState(() {
-                      gameMode = GameMode.computer;
-                      resetGame();
-                      Navigator.pop(context);
-                    }),
+                    onTap: () {
+                      setState(() {
+                        gameMode = GameMode.computer;
+                        resetGame();
+                      });
+                    },
                     color: playerColors[1],
                   ),
                 ),
@@ -579,48 +666,7 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
               style: TextStyle(color: Colors.white70, fontSize: 16),
             ),
             const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.all(15),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(15),
-              ),
-              child: Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Player X Wins:',
-                        style: TextStyle(color: playerColors[0]),
-                      ),
-                      Text(
-                        '$xScore',
-                        style: TextStyle(
-                            color: playerColors[0],
-                            fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Player O Wins:',
-                        style: TextStyle(color: playerColors[1]),
-                      ),
-                      Text(
-                        '$oScore',
-                        style: TextStyle(
-                            color: playerColors[1],
-                            fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
+            _buildStatistics(),
             const SizedBox(height: 15),
             ElevatedButton(
               onPressed: () {
