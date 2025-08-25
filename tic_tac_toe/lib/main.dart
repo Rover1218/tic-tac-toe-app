@@ -1,7 +1,16 @@
-import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import 'package:confetti/confetti.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:lottie/lottie.dart';
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+// Reactive theme controls
+final ValueNotifier<Color> seedColorNotifier =
+    ValueNotifier<Color>(const Color(0xFF0BA5A4));
+final ValueNotifier<ThemeMode> themeModeNotifier =
+    ValueNotifier<ThemeMode>(ThemeMode.system);
 
 void main() => runApp(const TicTacToeApp());
 
@@ -14,13 +23,50 @@ class TicTacToeApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        primarySwatch: Colors.deepPurple,
-        visualDensity: VisualDensity.adaptivePlatformDensity,
+    return ValueListenableBuilder<Color>(
+      valueListenable: seedColorNotifier,
+      builder: (context, seed, _) {
+        return ValueListenableBuilder<ThemeMode>(
+          valueListenable: themeModeNotifier,
+          builder: (context, mode, __) {
+            return MaterialApp(
+              title: 'Tic Tac Toe',
+              themeMode: mode,
+              theme: ThemeData(
+                colorScheme: ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.light),
+                useMaterial3: true,
+              ),
+              darkTheme: ThemeData(
+                colorScheme: ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark),
+                useMaterial3: true,
+              ),
+              home: const TicTacToe(),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+// Small colored dot used in theme color chips
+class _ColorDot extends StatelessWidget {
+  final Color color;
+  const _ColorDot(this.color);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 12,
+      height: 12,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outlineVariant,
+          width: 1,
+        ),
       ),
-      home: const TicTacToe(),
     );
   }
 }
@@ -40,20 +86,31 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
   late AnimationController _controller;
   int xScore = 0;
   int oScore = 0;
-  int draws = 0; // Add this line
+  int draws = 0;
   late AnimationController _pulseController;
   late AnimationController _celebrationController;
+  late AnimationController _sheetAnimationController;
   late AnimationController _shimmerController;
   late ConfettiController _confettiController;
   bool isLoading = true;
-  static const List<Color> playerColors = [
-    Color(0xFFE94560), // Soft Red for X
-    Color(0xFF2ECC71), // Emerald Green for O
+  List<Color> get playerColors => [
+    Theme.of(context).colorScheme.primary, // Use theme primary for X
+    Theme.of(context).colorScheme.secondary, // Use theme secondary for O
   ];
   GameMode gameMode = GameMode.twoPlayer;
   Difficulty difficulty = Difficulty.medium;
   final AudioPlayer _audioPlayer = AudioPlayer();
   bool isSoundEnabled = true; // Add this line
+  final List<int> _moveHistory = []; // track moves for undo
+  List<int>? _winningLine; // track winning indices
+  bool _startWithX = true; // starting player selector
+  // Turn ownership and input/AI state
+  String _humanSymbol = 'X';
+  String _computerSymbol = 'O';
+  bool _aiThinking = false;
+  bool _isHandlingTap = false; // prevent multi-touch double moves
+  int _countdownSeconds = 5;
+  Timer? _countdownTimer;
 
   @override
   void initState() {
@@ -73,6 +130,11 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
       duration: const Duration(milliseconds: 2000),
       vsync: this,
     );
+    
+    _sheetAnimationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 300),
+    );
 
     _shimmerController = AnimationController(
       duration: const Duration(milliseconds: 1500),
@@ -83,7 +145,7 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
         ConfettiController(duration: const Duration(seconds: 3));
 
     // Add initial loading animation
-    Future.delayed(const Duration(seconds: 2), () {
+    Future.delayed(const Duration(seconds: 5), () {
       setState(() {
         isLoading = false;
       });
@@ -96,12 +158,13 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
 
   @override
   void dispose() {
-    _audioPlayer.dispose();
     _controller.dispose();
     _pulseController.dispose();
     _celebrationController.dispose();
+    _sheetAnimationController.dispose();
     _shimmerController.dispose();
     _confettiController.dispose();
+    _audioPlayer.dispose();
     super.dispose();
   }
 
@@ -125,13 +188,37 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
     }
   }
 
+  void _startCountdownTimer() {
+    _countdownSeconds = 5;
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      setState(() {
+        _countdownSeconds--;
+      });
+      if (_countdownSeconds <= 0) {
+        timer.cancel();
+        resetGame();
+      }
+    });
+  }
+
   void resetGame() {
+    _countdownTimer?.cancel();
     setState(() {
       board = List.filled(9, '');
-      currentPlayer = 'X';
+      currentPlayer = _startWithX ? 'X' : 'O';
       result = '';
       gameOver = false;
+      _winningLine = null;
+      _moveHistory.clear();
+      _countdownSeconds = 5;
     });
+    _controller.reset();
+    _celebrationController.reset();
+    _confettiController.stop();
+    if (gameMode == GameMode.computer && currentPlayer == _computerSymbol) {
+      makeComputerMove();
+    }
   }
 
   void resetStats() {
@@ -142,14 +229,23 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
     });
   }
 
-  void handleTap(int index) {
-    if (board[index] == '' && !gameOver) {
+  void handleTap(int index, {bool byAI = false}) {
+    if (gameOver || board[index] != '') return;
+    // Block when it's not the human's turn or AI is thinking (unless move is by AI)
+    if (!byAI && gameMode == GameMode.computer) {
+      if (_aiThinking || currentPlayer != _humanSymbol) return;
+    }
+    // Prevent multi-touch / rapid double taps
+    if (_isHandlingTap) return;
+    _isHandlingTap = true;
+    try {
       // Play move sound immediately before state update
       _playSound('move');
 
       setState(() {
         board[index] = currentPlayer;
         _controller.forward(from: 0.0);
+        _moveHistory.add(index);
 
         if (checkWinner(currentPlayer)) {
           _celebrationController.forward(from: 0.0);
@@ -164,6 +260,8 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
           } else {
             oScore++;
           }
+          // Start countdown timer
+          _startCountdownTimer();
         } else if (!board.contains('')) {
           result = 'It\'s a Draw!';
           gameOver = true;
@@ -171,18 +269,23 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
           Future.delayed(const Duration(milliseconds: 50), () {
             _playSound('draw');
           });
+          // Start countdown timer
+          _startCountdownTimer();
         } else {
           currentPlayer = currentPlayer == 'X' ? 'O' : 'X';
-          if (gameMode == GameMode.computer && currentPlayer == 'O') {
+          if (gameMode == GameMode.computer && currentPlayer == _computerSymbol) {
             makeComputerMove();
           }
         }
       });
+    } finally {
+      _isHandlingTap = false;
     }
   }
 
+
   void makeComputerMove() {
-    if (gameOver || currentPlayer == 'X') return;
+    if (gameOver || currentPlayer != _computerSymbol || _aiThinking) return;
 
     int move;
     switch (difficulty) {
@@ -190,16 +293,19 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
         move = getRandomMove();
         break;
       case Difficulty.medium:
-        move =
-            math.Random().nextDouble() < 0.7 ? getBestMove() : getRandomMove();
+        // Faster medium: 60% depth-capped best move (shallower search), 40% random
+        move = math.Random().nextDouble() < 0.6
+            ? getBestMoveCapped(3)
+            : getRandomMove();
         break;
       case Difficulty.hard:
         move = getBestMove();
         break;
     }
-
+    _aiThinking = true;
     Future.delayed(const Duration(milliseconds: 500), () {
-      handleTap(move);
+      _aiThinking = false;
+      handleTap(move, byAI: true);
     });
   }
 
@@ -217,8 +323,8 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
 
     for (int i = 0; i < board.length; i++) {
       if (board[i] == '') {
-        board[i] = 'O';
-        int score = minimax(board, 0, false, -1000, 1000);
+        board[i] = _computerSymbol;
+        int score = minimax(board, 0, false, -1000, 1000, null, _computerSymbol);
         board[i] = '';
         if (score > bestScore) {
           bestScore = score;
@@ -229,23 +335,71 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
     return bestMove;
   }
 
-  int minimax(
-      List<String> board, int depth, bool isMaximizing, int alpha, int beta) {
-    String result = checkGameResult();
+  int getBestMoveCapped(int maxDepth) {
+    int bestScore = -1000;
+    int bestMove = 0;
+
+    for (int i = 0; i < board.length; i++) {
+      if (board[i] == '') {
+        board[i] = _computerSymbol;
+        int score = minimax(board, 0, false, -1000, 1000, maxDepth, _computerSymbol);
+        board[i] = '';
+        if (score > bestScore) {
+          bestScore = score;
+          bestMove = i;
+        }
+      }
+    }
+    return bestMove;
+  }
+
+  // Pure board evaluation helpers for AI (do not touch UI state)
+  bool _hasWinnerOn(List<String> b, String player) {
+    const patterns = [
+      [0, 1, 2], [3, 4, 5], [6, 7, 8],
+      [0, 3, 6], [1, 4, 7], [2, 5, 8],
+      [0, 4, 8], [2, 4, 6],
+    ];
+    for (final p in patterns) {
+      if (p.every((i) => b[i] == player)) return true;
+    }
+    return false;
+  }
+
+  String _gameResultOn(List<String> b) {
+    if (_hasWinnerOn(b, 'X')) return 'X';
+    if (_hasWinnerOn(b, 'O')) return 'O';
+    if (!b.contains('')) return 'draw';
+    return '';
+  }
+
+  int minimax(List<String> board, int depth, bool isMaximizing, int alpha,
+      int beta, int? maxDepth, String aiSymbol) {
+    String result = _gameResultOn(board);
+    // Depth cap for faster medium difficulty
+    if (maxDepth != null && depth >= maxDepth) {
+      // Simple evaluation at cap: immediate win/loss detection, else neutral
+      if (result == aiSymbol) return 10 - depth;
+      if (result.isNotEmpty && result != 'draw' && result != aiSymbol) {
+        return depth - 10;
+      }
+      return 0;
+    }
     if (result != '') {
-      return result == 'O'
-          ? 10 - depth
-          : result == 'X'
-              ? depth - 10
-              : 0;
+      if (result == aiSymbol) return 10 - depth;
+      if (result.isNotEmpty && result != 'draw' && result != aiSymbol) {
+        return depth - 10;
+      }
+      return 0;
     }
 
+    final opponent = aiSymbol == 'X' ? 'O' : 'X';
     if (isMaximizing) {
       int maxEval = -1000;
       for (int i = 0; i < board.length; i++) {
         if (board[i] == '') {
-          board[i] = 'O';
-          int eval = minimax(board, depth + 1, false, alpha, beta);
+          board[i] = aiSymbol;
+          int eval = minimax(board, depth + 1, false, alpha, beta, maxDepth, aiSymbol);
           board[i] = '';
           maxEval = math.max(maxEval, eval);
           alpha = math.max(alpha, eval);
@@ -259,8 +413,8 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
       int minEval = 1000;
       for (int i = 0; i < board.length; i++) {
         if (board[i] == '') {
-          board[i] = 'X';
-          int eval = minimax(board, depth + 1, true, alpha, beta);
+          board[i] = opponent;
+          int eval = minimax(board, depth + 1, true, alpha, beta, maxDepth, aiSymbol);
           board[i] = '';
           minEval = math.min(minEval, eval);
           beta = math.min(beta, eval);
@@ -290,6 +444,7 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
 
     for (var pattern in winPatterns) {
       if (pattern.every((index) => board[index] == player)) {
+        _winningLine = pattern;
         return true;
       }
     }
@@ -300,91 +455,53 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(20),
+        color: _winningLine?.contains(index) == true
+            ? (board[index] == 'X' ? playerColors[0] : playerColors[1])
+                .withOpacity(0.06)
+            : Colors.white,
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: board[index].isNotEmpty
+          color: _winningLine?.contains(index) == true
               ? (board[index] == 'X' ? playerColors[0] : playerColors[1])
-              : Colors.white24,
-          width: 3,
+              : board[index].isNotEmpty
+                  ? Theme.of(context).colorScheme.secondary.withOpacity(0.35)
+                  : Colors.grey.shade300,
+          width: _winningLine?.contains(index) == true ? 3 : 2,
         ),
         boxShadow: [
+          // Lighter shadows for better perf (especially on web/low-end)
           BoxShadow(
-            color: board[index].isNotEmpty
-                ? (board[index] == 'X'
-                    ? playerColors[0].withOpacity(0.4)
-                    : playerColors[1].withOpacity(0.4))
-                : Colors.white.withOpacity(0.05),
-            blurRadius: 20,
-            spreadRadius: 1,
+            color: (_winningLine?.contains(index) == true
+                    ? (board[index] == 'X' ? playerColors[0] : playerColors[1])
+                        .withOpacity(0.18)
+                    : Colors.black.withOpacity(0.02)),
+            blurRadius: _winningLine?.contains(index) == true ? 10 : 6,
+            spreadRadius: _winningLine?.contains(index) == true ? 1 : 0,
+            offset: const Offset(0, 1),
           ),
-          if (board[index].isNotEmpty)
-            BoxShadow(
-              color: board[index] == 'X'
-                  ? playerColors[0].withOpacity(0.2)
-                  : playerColors[1].withOpacity(0.2),
-              blurRadius: 35,
-              spreadRadius: 5,
-            ),
         ],
-        gradient: board[index].isNotEmpty
-            ? LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  board[index] == 'X'
-                      ? playerColors[0].withOpacity(0.15)
-                      : playerColors[1].withOpacity(0.15),
-                  Colors.transparent,
-                ],
-              )
-            : null,
       ),
       child: FittedBox(
-        // Add FittedBox here
         fit: BoxFit.contain,
         child: Container(
           padding: const EdgeInsets.all(15),
           child: Center(
-            child: AnimatedDefaultTextStyle(
-              duration: const Duration(milliseconds: 200),
-              style: TextStyle(
-                fontSize: board[index].isEmpty ? 0 : 60, // Reduced from 70
-                fontWeight: FontWeight.bold,
-                color: board[index] == 'X' ? playerColors[0] : playerColors[1],
-                shadows: [
-                  BoxShadow(
-                    color: board[index] == 'X'
-                        ? playerColors[0].withOpacity(0.8)
-                        : playerColors[1].withOpacity(0.8),
-                    blurRadius: 15,
-                    spreadRadius: 5,
-                  ),
-                  BoxShadow(
-                    color: board[index] == 'X'
-                        ? playerColors[0].withOpacity(0.4)
-                        : playerColors[1].withOpacity(0.4),
-                    blurRadius: 30,
-                    spreadRadius: 10,
-                  ),
-                ],
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              transitionBuilder: (child, animation) => ScaleTransition(
+                scale: CurvedAnimation(curve: Curves.easeOutBack, parent: animation),
+                child: child,
               ),
-              child: AnimatedBuilder(
-                animation: _shimmerController,
-                builder: (context, child) {
-                  return Transform.rotate(
-                    angle: board[index].isEmpty ? 0 : math.pi * 2,
-                    child: Transform.scale(
-                      scale: board[index].isEmpty
-                          ? 1
-                          : 1.0 +
-                              (0.1 *
-                                  math.sin(
-                                      _shimmerController.value * math.pi * 2)),
-                      child: Text(board[index]),
-                    ),
-                  );
-                },
+              child: Text(
+                board[index],
+                key: ValueKey(board[index]),
+                style: TextStyle(
+                  fontSize: board[index].isEmpty ? 0 : 60,
+                  fontWeight: FontWeight.w700,
+                  color: board[index].isEmpty
+                      ? Colors.transparent
+                      : Theme.of(context).colorScheme.secondary,
+                ),
               ),
             ),
           ),
@@ -400,47 +517,62 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
     required VoidCallback onTap,
     required Color color,
   }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? color.withOpacity(0.2)
-              : Colors.white.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: isSelected ? color : Colors.white24,
-            width: 2,
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = scheme.brightness == Brightness.dark;
+    // Slightly different bases by theme for better separation in light mode
+    final Color unselectedBase =
+        isDark ? scheme.surfaceContainerHigh : scheme.surfaceContainerLowest;
+    // Selected background lighter in light mode, stronger in dark mode
+    final Color bg = isSelected
+        ? color.withValues(alpha: isDark ? 0.15 : 0.06)
+        : unselectedBase;
+    final Color border = isSelected ? color : scheme.outlineVariant;
+    // In light mode keep text readable (onSurface). In dark, colored text is fine.
+    final Color fg = isSelected
+        ? (isDark ? color : scheme.onSurface)
+        : scheme.onSurface;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: border,
+              width: 1.5,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.03),
+                blurRadius: 3,
+                offset: const Offset(0, 1),
+              )
+            ],
           ),
-          boxShadow: isSelected
-              ? [
-                  BoxShadow(
-                    color: color.withOpacity(0.3),
-                    blurRadius: 8,
-                    spreadRadius: 1,
-                  )
-                ]
-              : [],
-        ),
-        child: Row(
-          children: [
-            Icon(
-              icon,
-              color: Colors.white,
-              size: 24,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          child: Row(
+            children: [
+              Icon(
+                icon,
+                color: fg,
+                size: 22,
               ),
-            ),
-          ],
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  color: fg,
+                  fontSize: 15,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -453,38 +585,116 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
       Difficulty.medium: Colors.orange,
       Difficulty.hard: Colors.red,
     };
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = scheme.brightness == Brightness.dark;
+    final base = isDark ? scheme.surfaceContainerHigh : scheme.surfaceContainerLowest;
+    final selColor = colors[diff]!;
 
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(15),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? selColor.withValues(alpha: isDark ? 0.15 : 0.06)
+                : base,
+            borderRadius: BorderRadius.circular(15),
+            border: Border.all(
+              color: isSelected ? selColor : scheme.outlineVariant,
+              width: 1.5,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.03),
+                blurRadius: 3,
+                offset: const Offset(0, 1),
+              )
+            ],
+          ),
+          child: Text(
+            diff.name.toUpperCase(),
+            style: TextStyle(
+              color: isSelected ? (isDark ? selColor : scheme.onSurface) : scheme.onSurface,
+              fontSize: 13,
+              fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCurrentPlayerIndicator() {
+    final scheme = Theme.of(context).colorScheme;
+    final Color ring = currentPlayer == 'X' ? playerColors[0] : playerColors[1];
+
+    return AnimatedBuilder(
+      animation: _pulseController,
+      builder: (context, child) {
+        final scale = 1.0 + 0.08 * math.sin(_pulseController.value * math.pi * 2);
+        return Transform.scale(scale: scale, child: child);
+      },
+      child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
-          color: isSelected
-              ? colors[diff]!.withOpacity(0.2)
-              : Colors.white.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(15),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              ring.withOpacity(0.1),
+              ring.withOpacity(0.05),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: isSelected ? colors[diff]! : Colors.white24,
+            color: ring.withOpacity(0.3),
             width: 2,
           ),
-          boxShadow: isSelected
-              ? [
-                  BoxShadow(
-                    color: colors[diff]!.withOpacity(0.3),
-                    blurRadius: 8,
-                    spreadRadius: 1,
-                  )
-                ]
-              : [],
+          boxShadow: [
+            BoxShadow(
+              color: scheme.shadow.withOpacity(0.1),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
+              spreadRadius: 0,
+            ),
+            BoxShadow(
+              color: ring.withOpacity(0.2),
+              blurRadius: 24,
+              offset: const Offset(0, 2),
+              spreadRadius: -4,
+            ),
+          ],
         ),
-        child: Text(
-          diff.name.toUpperCase(),
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 14,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-          ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: ring.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                currentPlayer == 'X' ? Icons.close_rounded : Icons.radio_button_unchecked_rounded,
+                size: 16,
+                color: ring,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Player $currentPlayer Turn',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: ring,
+                letterSpacing: -0.2,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -493,11 +703,16 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
   Widget _buildStatistics() {
     final gameCount = xScore + oScore + draws; //Use actual draws count
 
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = scheme.brightness == Brightness.dark;
+    final base = isDark ? scheme.surfaceContainerHigh : scheme.surfaceContainerLowest;
+
     return Container(
       padding: const EdgeInsets.all(15),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(15),
+        color: base,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
       ),
       child: Column(
         children: [
@@ -506,7 +721,7 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
             children: [
               Text(
                 'Player X Wins:',
-                style: TextStyle(color: playerColors[0]),
+                style: TextStyle(color: scheme.onSurface),
               ),
               Text(
                 '$xScore',
@@ -523,7 +738,7 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
             children: [
               Text(
                 'Player O Wins:',
-                style: TextStyle(color: playerColors[1]),
+                style: TextStyle(color: scheme.onSurface),
               ),
               Text(
                 '$oScore',
@@ -538,31 +753,31 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
+              Text(
                 'Draws:',
-                style: TextStyle(color: Colors.white70),
+                style: TextStyle(color: scheme.onSurfaceVariant),
               ),
               Text(
                 '$draws', // Use draws counter directly
-                style: const TextStyle(
-                  color: Colors.white70,
+                style: TextStyle(
+                  color: scheme.onSurfaceVariant,
                   fontWeight: FontWeight.bold,
                 ),
               ),
             ],
           ),
-          const Divider(color: Colors.white24, height: 20),
+          Divider(color: scheme.outlineVariant, height: 20),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
+              Text(
                 'Total Games:',
-                style: TextStyle(color: Colors.white),
+                style: TextStyle(color: scheme.onSurface),
               ),
               Text(
                 '$gameCount',
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: scheme.onSurface,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -573,110 +788,360 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildSettingsDrawer() {
-    return Drawer(
-      backgroundColor: const Color(0xFF6A11CB),
-      child: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+  Widget _buildSettingsSheetContent() {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Settings',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 20),
+          Text('Settings',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: Theme.of(context).colorScheme.onSurface,
+                  )),
+          const SizedBox(height: 20),
 
-            // Game Mode Section
-            const Text(
-              'Game Mode',
-              style: TextStyle(color: Colors.white70, fontSize: 16),
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: _buildModeButton(
-                    icon: Icons.people,
-                    label: '2 Players',
-                    isSelected: gameMode == GameMode.twoPlayer,
-                    onTap: () => setState(() {
-                      gameMode = GameMode.twoPlayer;
-                      resetGame();
-                      Navigator.pop(context);
-                    }),
-                    color: playerColors[0],
+          // Theme Mode
+          Text('Theme',
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w600,
+                  )),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              ChoiceChip(
+                label: Text(
+                  'System',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: themeModeNotifier.value == ThemeMode.system 
+                      ? Theme.of(context).colorScheme.onSecondaryContainer
+                      : Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: _buildModeButton(
-                    icon: Icons.computer,
-                    label: 'vs Computer',
-                    isSelected: gameMode == GameMode.computer,
-                    onTap: () {
+                selected: themeModeNotifier.value == ThemeMode.system,
+                onSelected: (_) {
+                  if (themeModeNotifier.value != ThemeMode.system) {
+                    themeModeNotifier.value = ThemeMode.system;
+                    Navigator.pop(context);
+                  }
+                },
+                backgroundColor: Theme.of(context).colorScheme.surface,
+                selectedColor: Theme.of(context).colorScheme.secondaryContainer,
+                side: BorderSide(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+              ),
+              const SizedBox(width: 8),
+              ChoiceChip(
+                label: Text(
+                  'Light',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: themeModeNotifier.value == ThemeMode.light 
+                      ? Theme.of(context).colorScheme.onSecondaryContainer
+                      : Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                selected: themeModeNotifier.value == ThemeMode.light,
+                onSelected: (_) {
+                  if (themeModeNotifier.value != ThemeMode.light) {
+                    themeModeNotifier.value = ThemeMode.light;
+                    Navigator.pop(context);
+                  }
+                },
+                backgroundColor: Theme.of(context).colorScheme.surface,
+                selectedColor: Theme.of(context).colorScheme.secondaryContainer,
+                side: BorderSide(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+              ),
+              const SizedBox(width: 8),
+              ChoiceChip(
+                label: Text(
+                  'Dark',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: themeModeNotifier.value == ThemeMode.dark 
+                      ? Theme.of(context).colorScheme.onSecondaryContainer
+                      : Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                selected: themeModeNotifier.value == ThemeMode.dark,
+                onSelected: (_) {
+                  if (themeModeNotifier.value != ThemeMode.dark) {
+                    themeModeNotifier.value = ThemeMode.dark;
+                    Navigator.pop(context);
+                  }
+                },
+                backgroundColor: Theme.of(context).colorScheme.surface,
+                selectedColor: Theme.of(context).colorScheme.secondaryContainer,
+                side: BorderSide(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Text('Theme Color',
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w600,
+                  )),
+          const SizedBox(height: 10),
+          ValueListenableBuilder<Color>(
+            valueListenable: seedColorNotifier,
+            builder: (context, currentColor, _) {
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  ChoiceChip(
+                    label: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const _ColorDot(Color(0xFF0BA5A4)),
+                        const SizedBox(width: 6),
+                        const Text('Teal'),
+                      ],
+                    ),
+                    selected: currentColor.value == 0xFF0BA5A4,
+                    onSelected: (selected) {
+                      if (selected && currentColor.value != 0xFF0BA5A4) {
+                        Navigator.pop(context);
+                        seedColorNotifier.value = const Color(0xFF0BA5A4);
+                      }
+                    },
+                  ),
+                  ChoiceChip(
+                    label: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const _ColorDot(Color(0xFF0B6EFD)),
+                        const SizedBox(width: 6),
+                        const Text('Blue'),
+                      ],
+                    ),
+                    selected: currentColor.value == 0xFF0B6EFD,
+                    onSelected: (selected) {
+                      if (selected && currentColor.value != 0xFF0B6EFD) {
+                        Navigator.pop(context);
+                        seedColorNotifier.value = const Color(0xFF0B6EFD);
+                      }
+                    },
+                  ),
+                  ChoiceChip(
+                    label: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const _ColorDot(Color(0xFF6750A4)),
+                        const SizedBox(width: 6),
+                        const Text('Purple'),
+                      ],
+                    ),
+                    selected: currentColor.value == 0xFF6750A4,
+                    onSelected: (selected) {
+                      if (selected && currentColor.value != 0xFF6750A4) {
+                        Navigator.pop(context);
+                        seedColorNotifier.value = const Color(0xFF6750A4);
+                      }
+                    },
+                  ),
+                  ChoiceChip(
+                    label: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const _ColorDot(Color(0xFF2BA24C)),
+                        const SizedBox(width: 6),
+                        const Text('Green'),
+                      ],
+                    ),
+                    selected: currentColor.value == 0xFF2BA24C,
+                    onSelected: (selected) {
+                      if (selected && currentColor.value != 0xFF2BA24C) {
+                        Navigator.pop(context);
+                        seedColorNotifier.value = const Color(0xFF2BA24C);
+                      }
+                    },
+                  ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 20),
+
+          // Game Mode Section
+          Text('Game Mode',
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.9),
+                    fontWeight: FontWeight.w600,
+                  )),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _buildModeButton(
+                  icon: Icons.people,
+                  label: '2 Players',
+                  isSelected: gameMode == GameMode.twoPlayer,
+                  onTap: () {
+                    if (!mounted) return;
+                    Navigator.pop(context);
+                    Future.delayed(const Duration(milliseconds: 120), () {
+                      if (!mounted) return;
+                      setState(() {
+                        gameMode = GameMode.twoPlayer;
+                        resetGame();
+                      });
+                    });
+                  },
+                  color: playerColors[0],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _buildModeButton(
+                  icon: Icons.computer,
+                  label: 'vs Computer',
+                  isSelected: gameMode == GameMode.computer,
+                  onTap: () {
+                    if (!mounted) return;
+                    Navigator.pop(context);
+                    Future.delayed(const Duration(milliseconds: 120), () {
+                      if (!mounted) return;
                       setState(() {
                         gameMode = GameMode.computer;
                         resetGame();
                       });
-                    },
-                    color: playerColors[1],
-                  ),
+                    });
+                  },
+                  color: playerColors[1],
                 ),
-              ],
-            ),
-
-            // Difficulty Section (only show when computer mode is selected)
-            if (gameMode == GameMode.computer) ...[
-              const SizedBox(height: 20),
-              const Text(
-                'Difficulty',
-                style: TextStyle(color: Colors.white70, fontSize: 16),
-              ),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                children: [
-                  for (var diff in Difficulty.values)
-                    _buildDifficultyButton(
-                      diff,
-                      isSelected: difficulty == diff,
-                      onTap: () => setState(() {
-                        difficulty = diff;
-                        resetGame();
-                        Navigator.pop(context);
-                      }),
-                    ),
-                ],
               ),
             ],
+          ),
 
-            // Add Sound Settings Section before Stats Section
-            const SizedBox(height: 30),
-            const Text(
-              'Sound Settings',
-              style: TextStyle(color: Colors.white70, fontSize: 16),
+          // Starting Player Section
+          const SizedBox(height: 20),
+          Text(
+            'Starting Player',
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _buildModeButton(
+                  icon: Icons.close,
+                  label: 'Start X',
+                  isSelected: _startWithX == true,
+                  onTap: () {
+                    if (!mounted) return;
+                    Navigator.pop(context);
+                    Future.delayed(const Duration(milliseconds: 120), () {
+                      if (!mounted) return;
+                      setState(() {
+                        _startWithX = true;
+                        resetGame();
+                      });
+                    });
+                  },
+                  color: playerColors[0],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildModeButton(
+                  icon: Icons.radio_button_unchecked,
+                  label: 'Start O',
+                  isSelected: _startWithX == false,
+                  onTap: () {
+                    if (!mounted) return;
+                    Navigator.pop(context);
+                    Future.delayed(const Duration(milliseconds: 120), () {
+                      if (!mounted) return;
+                      setState(() {
+                        _startWithX = false;
+                        resetGame();
+                      });
+                    });
+                  },
+                  color: playerColors[1],
+                ),
+              ),
+            ],
+          ),
+
+          // Difficulty Section (only show when computer mode is selected)
+          if (gameMode == GameMode.computer) ...[
+            const SizedBox(height: 20),
+            Text(
+              'Difficulty',
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.9),
+                    fontWeight: FontWeight.w600,
+                  ),
             ),
             const SizedBox(height: 10),
-            Container(
+            Wrap(
+              spacing: 8,
+              children: [
+                for (var diff in Difficulty.values)
+                  _buildDifficultyButton(
+                    diff,
+                    isSelected: difficulty == diff,
+                    onTap: () {
+                      if (!mounted) return;
+                      Navigator.pop(context);
+                      Future.delayed(const Duration(milliseconds: 120), () {
+                        if (!mounted) return;
+                        setState(() {
+                          difficulty = diff;
+                          resetGame();
+                        });
+                      });
+                    },
+                  ),
+              ],
+            ),
+          ],
+
+          // Add Sound Settings Section before Stats Section
+          const SizedBox(height: 30),
+          Text(
+            'Sound Settings',
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
+          const SizedBox(height: 10),
+          Builder(builder: (context) {
+            final scheme = Theme.of(context).colorScheme;
+            final isDark = scheme.brightness == Brightness.dark;
+            final base = isDark ? scheme.surfaceContainerHigh : scheme.surface;
+            return Container(
               padding: const EdgeInsets.all(15),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(15),
+                color: base,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: scheme.outlineVariant),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
+                  Text(
                     'Sound Effects',
-                    style: TextStyle(color: Colors.white),
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: scheme.onSurface,
+                        ),
                   ),
                   Switch(
                     value: isSoundEnabled,
@@ -685,90 +1150,89 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
                         isSoundEnabled = value;
                       });
                     },
-                    activeColor: const Color(0xFF2575FC),
-                    activeTrackColor: const Color(0xFF2575FC).withOpacity(0.3),
-                    inactiveThumbColor: Colors.white70,
-                    inactiveTrackColor: Colors.white24,
+                    activeColor: scheme.primary,
+                    activeTrackColor: scheme.primary.withValues(alpha: 0.3),
+                    inactiveThumbColor: scheme.outline,
+                    inactiveTrackColor:
+                        scheme.outlineVariant.withValues(alpha: 0.5),
                   ),
                 ],
               ),
-            ),
+            );
+          }),
 
-            // Stats Section
-            const SizedBox(height: 30),
-            const Text(
-              'Statistics',
-              style: TextStyle(color: Colors.white70, fontSize: 16),
+          // Stats Section
+          const SizedBox(height: 30),
+          Text(
+            'Statistics',
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
+          const SizedBox(height: 10),
+          _buildStatistics(),
+          const SizedBox(height: 15),
+          ElevatedButton(
+            onPressed: () {
+              resetStats();
+              Navigator.pop(context);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor:
+                  Theme.of(context).colorScheme.errorContainer,
+              foregroundColor:
+                  Theme.of(context).colorScheme.onErrorContainer,
             ),
-            const SizedBox(height: 10),
-            _buildStatistics(),
-            const SizedBox(height: 15),
-            ElevatedButton(
-              onPressed: () {
-                resetStats();
-                Navigator.pop(context);
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red.withOpacity(0.2),
-                foregroundColor: Colors.white,
-              ),
-              child: const Text('Reset Stats'),
-            ),
-          ],
+            child: const Text('Reset Stats'),
+          ),
+        ],
         ),
       ),
     );
   }
 
-  // Add this method for the current player indicator
-  Widget _buildCurrentPlayerIndicator() {
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 500), // Add const here
-      transitionBuilder: (Widget child, Animation<double> animation) {
-        return ScaleTransition(scale: animation, child: child);
-      },
-      child: Container(
-        key: ValueKey<String>(currentPlayer),
-        width: 80, // Fixed width
-        height: 80, // Fixed height
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: LinearGradient(
-            colors: currentPlayer == 'X'
-                ? const [Colors.redAccent, Colors.pinkAccent] // Add const here
-                : const [
-                    Colors.lightBlueAccent,
-                    Colors.blueAccent
-                  ], // Add const here
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          // ignore: prefer_const_constructors_in_immutables, prefer_const_literals_to_create_immutables
-          boxShadow: [
-            BoxShadow(
-              color: currentPlayer == 'X'
-                  ? Colors.pinkAccent.withOpacity(0.6)
-                  : Colors.blueAccent.withOpacity(0.6),
-              blurRadius: 15,
-              spreadRadius: 5,
-            ),
-          ],
-        ),
-        child: Center(
-          // Add Center widget
-          child: Text(
-            currentPlayer,
-            style: const TextStyle(
-              fontSize: 48,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
-              shadows: [
-                Shadow(
-                  blurRadius: 10,
-                  color: Colors.black45,
-                  offset: Offset(0, 4),
+
+  void _showSettingsSheet() {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withOpacity(0.5),
+      builder: (context) => GestureDetector(
+        onTap: () => Navigator.pop(context),
+        child: Container(
+          color: Colors.transparent,
+          alignment: Alignment.center,
+          child: GestureDetector(
+            onTap: () {}, // Prevent tap from bubbling up
+            child: Container(
+              margin: const EdgeInsets.all(16),
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.75,
+                maxWidth: 400,
+              ),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.outline.withOpacity(0.1),
+                  width: 1,
                 ),
-              ],
+                boxShadow: [
+                  BoxShadow(
+                    color: Theme.of(context).colorScheme.shadow.withOpacity(0.08),
+                    blurRadius: 16,
+                    offset: const Offset(0, 8),
+                    spreadRadius: 0,
+                  ),
+                ],
+              ),
+              child: Material(
+                color: Colors.transparent,
+                child: SingleChildScrollView(
+                  child: _buildSettingsSheetContent(),
+                ),
+              ),
             ),
           ),
         ),
@@ -779,210 +1243,209 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      extendBodyBehindAppBar: true, // Add this line
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(56),
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                const Color(0xFF6A11CB).withOpacity(0.8),
-                const Color(0xFF2575FC).withOpacity(0.8),
-              ],
-            ),
-          ),
-          child: AppBar(
-            title: const Text(
-              'Tic Tac Toe',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            actions: [
-              Builder(
-                builder: (context) => IconButton(
-                  icon: const Icon(Icons.settings, color: Colors.white),
-                  onPressed: () => Scaffold.of(context).openEndDrawer(),
+      appBar: AppBar(
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.primary.withOpacity(0.2),
+                  width: 1,
                 ),
               ),
-            ],
-          ),
-        ),
-      ),
-      endDrawer: _buildSettingsDrawer(),
-      body: Stack(
-        children: [
-          Container(
-            width: double.infinity,
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Color(0xFF6A11CB), // Vibrant Purple
-                  Color(0xFF2575FC), // Electric Blue
-                  Color(0xFF6A11CB), // Vibrant Purple
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.games_rounded,
+                    size: 20,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Tic Tac Toe',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 18,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
                 ],
-                stops: [0.0, 0.5, 1.0],
               ),
             ),
-            child: AnimatedOpacity(
-              duration: const Duration(milliseconds: 500),
-              opacity: isLoading ? 0.0 : 1.0,
-              child: SafeArea(
+            const SizedBox(width: 12),
+            if (_aiThinking)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.secondaryContainer.withOpacity(0.5),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation(
+                          Theme.of(context).colorScheme.secondary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'AI Thinking…',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: Theme.of(context).colorScheme.onSecondaryContainer,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+        actions: [
+          Container(
+            margin: const EdgeInsets.only(right: 8),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: IconButton(
+              icon: Icon(
+                Icons.settings_rounded,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+              onPressed: _showSettingsSheet,
+              tooltip: 'Settings',
+              style: IconButton.styleFrom(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ),
+        ],
+        elevation: 0,
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        surfaceTintColor: Colors.transparent,
+      ),
+      body: Stack(
+        children: [
+          AnimatedOpacity(
+            duration: const Duration(milliseconds: 500),
+            opacity: isLoading ? 0.0 : 1.0,
+            child: SafeArea(
                 child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      // Score Board
-                      Flexible(
-                        flex: 1,
-                        child: Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: [
-                              Expanded(
-                                child: _buildScoreCard(
-                                    'Player X', xScore, playerColors[0]),
-                              ),
-                              const SizedBox(width: 20),
-                              Expanded(
-                                child: _buildScoreCard(
-                                    'Player O', oScore, playerColors[1]),
-                              ),
-                            ],
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Column(
+                  children: [
+                    // Score Board
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _buildScoreCard(
+                                'Player X', xScore, playerColors[0]),
                           ),
-                        ),
-                      ),
-
-                      // Current Player Indicator
-                      SizedBox(
-                        height: 100,
-                        child: _buildCurrentPlayerIndicator(),
-                      ),
-
-                      const SizedBox(height: 15), // reduced from 20
-
-                      // Game Board
-                      Flexible(
-                        flex: 4,
-                        child: AspectRatio(
-                          aspectRatio: 1,
-                          child: Container(
-                            padding: const EdgeInsets.all(8),
-                            child: GridView.builder(
-                              physics: const NeverScrollableScrollPhysics(),
-                              gridDelegate:
-                                  const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 3,
-                                mainAxisSpacing: 15.0,
-                                crossAxisSpacing: 15.0,
-                              ),
-                              itemCount: 9,
-                              itemBuilder: (context, index) => GestureDetector(
-                                onTap: () => handleTap(index),
-                                child: _buildGridCell(index),
-                              ),
-                            ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: _buildScoreCard(
+                                'Player O', oScore, playerColors[1]),
                           ),
-                        ),
+                        ],
                       ),
+                    ),
 
-                      const SizedBox(height: 10), // reduced from 15
+                    // Current Player Indicator
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: _buildCurrentPlayerIndicator(),
+                    ),
 
-                      // Result and Button Area
-                      SizedBox(
-                        height: 100, // Fixed height
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                    // Game Board
+                    Flexible(
+                      flex: 4,
+                      child: AspectRatio(
+                        aspectRatio: 1,
+                        child: Stack(
                           children: [
-                            if (result.isNotEmpty)
-                              SizedBox(
-                                height: 50, // Fixed height for result
-                                child: AnimatedBuilder(
-                                  animation: _celebrationController,
-                                  builder: (context, child) => Transform.scale(
-                                    scale: 1 +
-                                        (_celebrationController.value * 0.2),
-                                    child: AnimatedOpacity(
-                                      opacity: result.isNotEmpty ? 1 : 0,
-                                      duration:
-                                          const Duration(milliseconds: 300),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 24,
-                                          vertical: 8,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: (result.contains('X')
-                                                  ? playerColors[0]
-                                                  : result.contains('O')
-                                                      ? playerColors[1]
-                                                      : Colors.white)
-                                              .withOpacity(0.2),
-                                          borderRadius:
-                                              BorderRadius.circular(25),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: (result.contains('X')
-                                                      ? playerColors[0]
-                                                      : result.contains('O')
-                                                          ? playerColors[1]
-                                                          : Colors.white)
-                                                  .withOpacity(0.3),
-                                              blurRadius: 15,
-                                              spreadRadius: 2,
-                                            ),
-                                          ],
-                                        ),
-                                        child: Text(
-                                          result,
-                                          style: const TextStyle(
-                                            fontSize: 20, // Reduced font size
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.white,
-                                          ),
-                                        ),
-                                      ),
+                            IgnorePointer(
+                              ignoring:
+                                  _isHandlingTap || _aiThinking || gameOver,
+                              child: Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context).colorScheme.surface,
+                                  borderRadius: BorderRadius.circular(24),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Theme.of(context).colorScheme.shadow.withOpacity(0.1),
+                                      blurRadius: 20,
+                                      offset: const Offset(0, 8),
+                                      spreadRadius: 0,
+                                    ),
+                                    BoxShadow(
+                                      color: Theme.of(context).colorScheme.primary.withOpacity(0.05),
+                                      blurRadius: 40,
+                                      offset: const Offset(0, 4),
+                                      spreadRadius: -8,
+                                    ),
+                                  ],
+                                  border: Border.all(
+                                    color: Theme.of(context).colorScheme.outline.withOpacity(0.1),
+                                    width: 1,
+                                  ),
+                                ),
+                                child: GridView.builder(
+                                  physics:
+                                      const NeverScrollableScrollPhysics(),
+                                  gridDelegate:
+                                      const SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: 3,
+                                    mainAxisSpacing: 12.0,
+                                    crossAxisSpacing: 12.0,
+                                  ),
+                                  itemCount: 9,
+                                  itemBuilder: (context, index) => Material(
+                                    color: Colors.transparent,
+                                    borderRadius: BorderRadius.circular(16),
+                                    child: InkWell(
+                                      borderRadius: BorderRadius.circular(16),
+                                      onTap: () => handleTap(index),
+                                      splashColor: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                                      highlightColor: Theme.of(context).colorScheme.primary.withOpacity(0.05),
+                                      child: _buildGridCell(index),
                                     ),
                                   ),
                                 ),
                               ),
-
-                            const SizedBox(height: 8),
-
-                            // Reset Button
-                            SizedBox(
-                              height: 40,
-                              width: MediaQuery.of(context).size.width * 0.4,
-                              child: ElevatedButton(
-                                onPressed: resetGame,
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor:
-                                      Colors.white.withOpacity(0.2),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 24,
-                                    vertical: 10,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(25),
-                                  ),
-                                ),
-                                child: const Text(
-                                  'New Game',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
+                            ),
+                            // Disabled overlay when input is blocked
+                            Positioned.fill(
+                              child: AnimatedOpacity(
+                                duration: const Duration(milliseconds: 150),
+                                opacity: (_isHandlingTap || _aiThinking)
+                                    ? 0.08
+                                    : 0.0,
+                                child: IgnorePointer(
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .surfaceTint
+                                          .withOpacity(0.6),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
                                   ),
                                 ),
                               ),
@@ -990,8 +1453,106 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
                           ],
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+
+                    const SizedBox(height: 10), // reduced from 15
+
+                    // Result and Button Area
+                    SizedBox(
+                      height: 100, // Fixed height
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          if (result.isNotEmpty)
+                            SizedBox(
+                              height: 50, // Fixed height for result
+                              child: AnimatedBuilder(
+                                animation: _celebrationController,
+                                builder: (context, child) => Transform.scale(
+                                  scale: 1 +
+                                      (_celebrationController.value * 0.2),
+                                  child: AnimatedOpacity(
+                                    opacity: result.isNotEmpty ? 1 : 0,
+                                    duration:
+                                        const Duration(milliseconds: 300),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 24,
+                                        vertical: 8,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: (Theme.of(context)
+                                                    .colorScheme
+                                                    .brightness ==
+                                                Brightness.dark)
+                                            ? Theme.of(context)
+                                                .colorScheme
+                                                .surfaceContainerHigh
+                                            : Theme.of(context)
+                                                .colorScheme
+                                                .surfaceContainerLowest,
+                                        borderRadius:
+                                            BorderRadius.circular(25),
+                                        border: Border.all(
+                                          color: result.contains('X')
+                                              ? playerColors[0]
+                                              : result.contains('O')
+                                                  ? playerColors[1]
+                                                  : Theme.of(context)
+                                                      .colorScheme
+                                                      .outlineVariant,
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black
+                                                .withOpacity(0.05),
+                                            blurRadius: 8,
+                                            offset: const Offset(0, 2),
+                                          ),
+                                        ],
+                                      ),
+                                      child: Text(
+                                        result,
+                                        style: TextStyle(
+                                          fontSize: 20, // Reduced font size
+                                          fontWeight: FontWeight.bold,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .onSurface,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+
+                          const SizedBox(height: 8),
+
+                          // Dynamic countdown timer (only show when game is over)
+                          if (gameOver)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Text(
+                                'New game starts in $_countdownSeconds seconds...',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1000,15 +1561,21 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
           // Loading Screen
           if (isLoading)
             Container(
-              color: const Color(0xFF6A11CB),
+              color: Theme.of(context).colorScheme.surface,
               child: Center(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const CircularProgressIndicator(
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    SizedBox(
+                      width: 180,
+                      height: 180,
+                      child: Lottie.asset(
+                        'assets/animations/new-tic.json',
+                        repeat: true,
+                        fit: BoxFit.contain,
+                      ),
                     ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 16),
                     AnimatedBuilder(
                       animation: _shimmerController,
                       builder: (context, child) {
@@ -1016,10 +1583,11 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
                           scale: 1.0 +
                               0.1 *
                                   math.sin(_shimmerController.value * math.pi),
-                          child: const Text(
+                          child: Text(
                             "Tic Tac Toe",
                             style: TextStyle(
-                              color: Colors.white,
+                              color:
+                                  Theme.of(context).colorScheme.onSurface,
                               fontSize: 32,
                               fontWeight: FontWeight.bold,
                             ),
@@ -1058,49 +1626,88 @@ class _TicTacToeState extends State<TicTacToe> with TickerProviderStateMixin {
   }
 
   Widget _buildScoreCard(String player, int score, Color color) {
+    final scheme = Theme.of(context).colorScheme;
     return Container(
-      padding: const EdgeInsets.symmetric(
-          horizontal: 12, vertical: 6), // reduced from 15,8
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.2),
-        borderRadius: BorderRadius.circular(15),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            scheme.surfaceVariant.withOpacity(0.3),
+            scheme.surface,
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: color.withOpacity(0.2),
+          width: 1.5,
+        ),
         boxShadow: [
           BoxShadow(
-            color: color.withOpacity(0.3),
-            blurRadius: 8,
-            spreadRadius: 2,
+            color: scheme.shadow.withOpacity(0.08),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+            spreadRadius: 0,
+          ),
+          BoxShadow(
+            color: color.withOpacity(0.1),
+            blurRadius: 20,
+            offset: const Offset(0, 2),
+            spreadRadius: -4,
           ),
         ],
       ),
       child: Column(
-        mainAxisSize: MainAxisSize.min, // add this
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            player,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 16, // reduced from 18
-              fontWeight: FontWeight.bold,
-              shadows: [
-                Shadow(
-                  color: color.withOpacity(0.5),
-                  blurRadius: 5,
+          Flexible(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Icon(
+                    player.contains('X') ? Icons.close_rounded : Icons.radio_button_unchecked_rounded,
+                    size: 12,
+                    color: color,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    player,
+                    style: TextStyle(
+                      color: scheme.onSurface,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.3,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ],
             ),
           ),
-          Text(
-            '$score',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 24, // reduced from 28
-              fontWeight: FontWeight.bold,
-              shadows: [
-                Shadow(
-                  color: color,
-                  blurRadius: 10,
-                ),
-              ],
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              '$score',
+              style: TextStyle(
+                color: color,
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.3,
+              ),
             ),
           ),
         ],
