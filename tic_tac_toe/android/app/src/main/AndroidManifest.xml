@@ -1,8 +1,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Internet permission for potential future features -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    
+    <!-- Audio playback permission -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    
     <application
-        android:label="Tic Tac Toe"
+        android:label="Tic Tac Toe Classic"
         android:name="${applicationName}"
-        android:icon="@mipmap/launcher_icon">
+        android:icon="@mipmap/launcher_icon"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:supportsRtl="true"
+        android:theme="@style/LaunchTheme">
         <activity
             android:name=".MainActivity"
             android:exported="true"

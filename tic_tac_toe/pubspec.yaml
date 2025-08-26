@@ -1,5 +1,5 @@
 name: "tic_tac_toe"
-description: "A new Flutter project."
+description: "A classic Tic Tac Toe game with beautiful animations, sound effects, and AI opponents. Play against friends or challenge the computer in three difficulty levels."
 publish_to: 'none'
 
 version: 1.0.0+1
